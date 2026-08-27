@@ -17,11 +17,27 @@ from darts.models.forecasting.prophet_model import Prophet
 from build_models import NHitsForecastingModel, ProphetForecastingModel
 
 
+NHITS_INPUT_CHUNK_LENGTH = 7
+NHITS_OUTPUT_CHUNK_LENGTH = 1
+
+
 def build_model(model_type: str) -> typing.Any:
     if model_type == "nhits":
-        return NHiTSModel(num_stacks=3, num_blocks=2, num_layers=1, input_chunk_length=7, output_chunk_length=1)
+        return NHiTSModel(
+            num_stacks=3,
+            num_blocks=2,
+            num_layers=1,
+            input_chunk_length=NHITS_INPUT_CHUNK_LENGTH,
+            output_chunk_length=NHITS_OUTPUT_CHUNK_LENGTH,
+        )
     else:
         return Prophet(country_holidays="DE")
+
+
+def minimum_training_points(model_type: str) -> int:
+    if model_type == "nhits":
+        return NHITS_INPUT_CHUNK_LENGTH + NHITS_OUTPUT_CHUNK_LENGTH
+    return 3
     
 def parse_row(row):
     parsed = extract_timestamp_and_value(row)
@@ -77,11 +93,14 @@ def train_forecasting_model(ds: typing.List[ray.ObjectRef[ray.data.Dataset]],
 
         with mlflow_logger.trace("count_resampled_timeseries_points"):
             num_training_points = len(training_timeseries)
-        if num_training_points < 3:
+        required_training_points = minimum_training_points(model_type)
+        if num_training_points < required_training_points:
             raise RuntimeError(
-                "Need at least 3 points in resampled historic time series to fit the model.")
+                f"Need at least {required_training_points} points in resampled "
+                "historic time series to fit the model."
+            )
 
-        # Log static run metadata once (params, tags, and dataset summary artifact).
+        # Log training metadata.
         mlflow_logger.set_tags({
             "training.framework": "ray-train-consumption_forecast",
             "training.task": "predict-next-consumption-value",
@@ -101,9 +120,8 @@ def train_forecasting_model(ds: typing.List[ray.ObjectRef[ray.data.Dataset]],
         }, "training_dataset_summary.json")
 
         model = build_model(model_type)
-            
+
         model.fit(training_timeseries)
-        mlflow_logger.finish(status="FINISHED")
 
         if model_type == "nhits":
             return NHitsForecastingModel(model, pd.Timestamp(last_ts))

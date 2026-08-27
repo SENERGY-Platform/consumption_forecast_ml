@@ -1,11 +1,15 @@
 import typing
 import ray
-from util import extract_timestamp_and_value, convert_dataset_to_timeseries
+from util import (
+    convert_dataset_to_timeseries,
+    extract_timestamp_and_value,
+    to_utc_naive_timestamp,
+)
 import darts
 import pandas as pd
 
 
-_PERIOD_FREQUENCIES = {
+PERIOD_FREQUENCIES = {
     "H": "h",
     "D": "D",
     "W": "W-SUN",
@@ -13,38 +17,38 @@ _PERIOD_FREQUENCIES = {
     "Y": "Y-DEC",
 }
 
-def check_for_period_change(timestamp, last_timestamp, period):
-    current_timestamp = pd.Timestamp(timestamp)
-    previous_timestamp = pd.Timestamp(last_timestamp)
+
+def get_period_bounds(timestamp, period):
+    current_timestamp = to_utc_naive_timestamp(timestamp)
 
     if period == "4H":
-        return current_timestamp.floor("4h") != previous_timestamp.floor("4h")
+        period_start = current_timestamp.floor("4h")
+        return period_start, period_start + pd.Timedelta(hours=4)
 
-    frequency = _PERIOD_FREQUENCIES.get(period)
+    frequency = PERIOD_FREQUENCIES.get(period)
     if frequency is None:
         raise ValueError(f"Unsupported period: {period}")
 
-    return (
-        current_timestamp.to_period(frequency)
-        != previous_timestamp.to_period(frequency)
+    current_period = current_timestamp.to_period(frequency)
+    return current_period.start_time, current_period.end_time + pd.Timedelta(
+        nanoseconds=1
     )
 
 
+def check_for_period_change(timestamp, last_timestamp, period):
+    current_period_start, _ = get_period_bounds(timestamp, period)
+    previous_period_start, _ = get_period_bounds(last_timestamp, period)
+    return current_period_start != previous_period_start
+
+
+def get_period_start(timestamp, period) -> pd.Timestamp:
+    period_start, _ = get_period_bounds(timestamp, period)
+    return period_start
+
+
 def get_period_end(timestamp, period) -> pd.Timestamp:
-    current_timestamp = pd.Timestamp(timestamp)
-
-    if period == "4H":
-        return (
-            current_timestamp.floor("4h")
-            + pd.Timedelta(hours=4)
-            - pd.Timedelta(nanoseconds=1)
-        )
-
-    frequency = _PERIOD_FREQUENCIES.get(period)
-    if frequency is None:
-        raise ValueError(f"Unsupported period: {period}")
-
-    return current_timestamp.to_period(frequency).end_time
+    _, period_end_exclusive = get_period_bounds(timestamp, period)
+    return period_end_exclusive - pd.Timedelta(nanoseconds=1)
 
 def parse_row(row):
     parsed = extract_timestamp_and_value(row)

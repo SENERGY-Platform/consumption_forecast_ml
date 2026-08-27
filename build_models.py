@@ -1,3 +1,4 @@
+import numbers
 import typing
 
 import pandas as pd
@@ -9,6 +10,20 @@ from darts.models.forecasting.nhits import NHiTSModel
 from darts.models.forecasting.prophet_model import Prophet
 
 
+def get_missing_steps(data: typing.Any) -> int:
+    if not isinstance(data, dict):
+        raise ValueError("Model input must be a dict.")
+
+    missing_steps = data.get("missing_steps")
+    if (
+        isinstance(missing_steps, bool)
+        or not isinstance(missing_steps, numbers.Integral)
+        or missing_steps < 1
+    ):
+        raise ValueError("data must include a positive integer 'missing_steps'.")
+    return int(missing_steps)
+
+
 
 class NHitsForecastingModel(PythonModel):
     def __init__(
@@ -16,20 +31,11 @@ class NHitsForecastingModel(PythonModel):
         model: NHiTSModel,
         last_ts: pd.Timestamp
     ) -> None:
-        self._model = model
+        self.model = model
         self.last_ts = last_ts
 
     def predict(self, data: typing.Any) -> typing.Any:
-        if isinstance(data, dict):
-            missing_steps = data.get("missing_steps")
-            ts = data.get("timestamp")
-            value = data.get("value")
-            if missing_steps is None or ts is None or value is None:
-                raise ValueError(
-                    "data must include 'missing_steps', 'timestamp', and 'value'.")
-            prediction = self._model.predict(missing_steps)
-            return prediction
-        raise ValueError("Model input must be a dict.")
+        return self.model.predict(get_missing_steps(data))
         
 class ProphetForecastingModel(PythonModel):
     def __init__(
@@ -37,18 +43,9 @@ class ProphetForecastingModel(PythonModel):
         model: Prophet,
         last_ts: pd.Timestamp
     ) -> None:
-        self._model = model
+        self.model = model
         self.last_ts = last_ts
 
     def predict(self, data: typing.Any) -> typing.Any:
-        if isinstance(data, dict):
-            missing_steps = data.get("missing_steps")
-            ts = data.get("timestamp")
-            value = data.get("value")
-            if missing_steps is None or ts is None or value is None:
-                raise ValueError(
-                    "data must include 'missing_steps', 'timestamp', and 'value'.")
-            prediction = self._model.predict(missing_steps)
-            return prediction
-        raise ValueError("Model input must be a dict.")
+        return self.model.predict(get_missing_steps(data))
 
