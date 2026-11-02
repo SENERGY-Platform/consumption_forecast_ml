@@ -57,6 +57,8 @@ class CustomConfig(Config):
     time_periods: str = "D"
     model: str = "prophet"
     add_time_covariates: bool = False
+    # A field of the library, declared again so that flows can set it.
+    logger_level: str = "warning"
 
     def __init__(self, d, **kwargs):
         super().__init__(d, **kwargs)

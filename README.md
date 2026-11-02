@@ -21,6 +21,7 @@ Der Zeitpunkt einer Messung ist der Zeitstempel ihrer Kafka-Nachricht.
 | `time_periods`        | string | Kommagetrennt: `H`, `4H`, `D`, `W`, `M` und/oder `Y`           | `D`       |
 | `model`               | string | `prophet` oder `nhits`                                         | `prophet` |
 | `add_time_covariates` | bool   | Kalendermerkmale als Kovariaten: Monat, bei Rastern unter einer Woche der Wochentag, bei stündlichem Raster die Stunde | `false` |
+| `logger_level`        | string | Log-Level, etwa `info` oder `debug`                            | `warning` |
 
 Weitere Einstellungen wie `ray_url`, `mlflow_url` und `ts_conn` stammen aus
 `operator-lib`; `ts_conn` setzt die Flow-Engine.
@@ -34,7 +35,7 @@ Je konfigurierter Periode drei Felder, alle Perioden in einer Nachricht.
 |----------------------------|--------|--------------|
 | `<Periode>Prediction`      | float  | Verbrauch der laufenden Periode: bisher gemessen plus Prognose für den Rest |
 | `<Periode>PredictionTotal` | float  | Erwarteter Zählerstand am Periodenende |
-| `<Periode>Timestamp`       | string | Ende der Periode in UTC, z. B. `2026-01-14 22:59:59` |
+| `<Periode>Timestamp`       | string | Ende der Periode in UTC, z. B. `2026-01-14T22:59:59Z` |
 
 Eine Periode wird neu prognostiziert, sobald ihr Raster ein Intervall
 weiterrückt oder sie neu beginnt: die Stunde und der 4-Stunden-Block stündlich,

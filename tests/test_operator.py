@@ -92,6 +92,7 @@ class ManifestTest(unittest.TestCase):
             {"name": "time_periods", "type": "string"},
             {"name": "model", "type": "string"},
             {"name": "add_time_covariates", "type": "bool"},
+            {"name": "logger_level", "type": "string"},
         ])
 
     def test_declares_every_output_of_every_period(self):
@@ -125,7 +126,7 @@ class InferTest(unittest.TestCase):
         self.assertOutput(output, {
             "HourPrediction": 1.0,
             "HourPredictionTotal": 100.75,
-            "HourTimestamp": "2026-01-14 14:59:59",
+            "HourTimestamp": "2026-01-14T14:59:59Z",
         })
 
     def test_does_not_forecast_again_within_same_hour(self):
@@ -144,7 +145,7 @@ class InferTest(unittest.TestCase):
 
         _, output, _ = receive(operator, "2026-01-14 15:05", model)
 
-        self.assertEqual(output["HourTimestamp"], "2026-01-14 15:59:59")
+        self.assertEqual(output["HourTimestamp"], "2026-01-14T15:59:59Z")
 
     def test_combines_all_configured_periods_in_one_message(self):
         operator = make_operator("H,D")
@@ -160,10 +161,10 @@ class InferTest(unittest.TestCase):
         self.assertOutput(output, {
             "HourPrediction": 1.0,
             "HourPredictionTotal": 100.75,
-            "HourTimestamp": "2026-01-14 14:59:59",
+            "HourTimestamp": "2026-01-14T14:59:59Z",
             "DayPrediction": 24.0,
             "DayPredictionTotal": 108.75,
-            "DayTimestamp": "2026-01-14 22:59:59",
+            "DayTimestamp": "2026-01-14T22:59:59Z",
         })
 
     def test_repeats_unchanged_day_forecast_when_only_hour_moves_on(self):
@@ -177,7 +178,7 @@ class InferTest(unittest.TestCase):
             _, first, _ = receive(operator, "2026-01-14 14:15", model)
             _, second, _ = receive(operator, "2026-01-14 15:05", model)
 
-        self.assertEqual(second["HourTimestamp"], "2026-01-14 15:59:59")
+        self.assertEqual(second["HourTimestamp"], "2026-01-14T15:59:59Z")
         self.assertEqual(
             {key: second[key] for key in first if key.startswith("Day")},
             {key: first[key] for key in first if key.startswith("Day")},
@@ -192,8 +193,8 @@ class InferTest(unittest.TestCase):
             _, before, _ = receive(operator, "2026-01-14 22:30", model)
             _, after, _ = receive(operator, "2026-01-14 23:10", model)
 
-        self.assertEqual(before["DayTimestamp"], "2026-01-14 22:59:59")
-        self.assertEqual(after["DayTimestamp"], "2026-01-15 22:59:59")
+        self.assertEqual(before["DayTimestamp"], "2026-01-14T22:59:59Z")
+        self.assertEqual(after["DayTimestamp"], "2026-01-15T22:59:59Z")
         self.assertAlmostEqual(after["DayPrediction"], 24.0)
 
     def test_does_not_forecast_with_model_of_other_model_type(self):

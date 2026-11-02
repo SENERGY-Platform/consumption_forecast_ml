@@ -99,10 +99,10 @@ class GetPeriodEndTest(unittest.TestCase):
 
 
 class FormatPeriodEndTest(unittest.TestCase):
-    def test_writes_end_of_berlin_day_in_utc_in_old_operator_format(self):
+    def test_writes_end_of_berlin_day_in_utc_with_z(self):
         self.assertEqual(
             format_period_end(pd.Timestamp("2026-01-14 12:00"), "D"),
-            "2026-01-14 22:59:59",
+            "2026-01-14T22:59:59Z",
         )
 
 

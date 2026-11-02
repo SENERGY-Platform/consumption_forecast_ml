@@ -71,8 +71,9 @@ def get_period_end(timestamp, period) -> pd.Timestamp:
 
 
 def format_period_end(timestamp, period) -> str:
-    # The format of the old operator's <Period>Timestamp outputs, in UTC.
-    return get_period_end(timestamp, period).strftime("%Y-%m-%d %H:%M:%S")
+    # Timestamps in operator outputs are UTC with Z, as the platform's
+    # checklist for shared content asks.
+    return get_period_end(timestamp, period).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def get_raster_start(timestamp, timeseries_frequency) -> pd.Timestamp:
