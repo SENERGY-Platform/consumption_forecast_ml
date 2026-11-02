@@ -72,7 +72,17 @@ ausgeführt. Der Cluster läuft mit den Standard-Images von Ray und enthält wed
 diesen Operator noch seine Abhängigkeiten. Läuft der Operator unter `uv run`,
 überträgt Ray das Arbeitsverzeichnis samt `pyproject.toml` und `uv.lock` an den
 Cluster und baut dort dieselbe Umgebung auf. Das Training läuft damit immer mit
-dem Code des Operators; ohne `uv run` schlägt es fehl.
+dem Code des Operators; ohne `uv run` schlägt es fehl. Das Docker-Image startet
+den Operator deshalb mit `uv run`.
+
+## Image
+
+Jeder Push auf `master` baut
+`ghcr.io/senergy-platform/consumption-forecast-operator:vX.Y.Z`. Die Version
+ergibt sich aus den Conventional Commits seit dem letzten Versions-Tag. Das
+Repo löst `SENERGY-Platform/consumption_forecast` ab, dessen Image-Reihe bei
+v1.0.1 endete, und beginnt deshalb mit v2.0.0. `:prod` zeigt bis zur Umstellung
+des Operator-Eintrags in der Plattform noch auf den alten Operator.
 
 ## Lokale Entwicklung
 
