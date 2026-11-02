@@ -1,0 +1,4 @@
+# Store and check out every text file with LF, regardless of core.autocrlf.
+# Several files had mixed CRLF/LF endings, so edits on Windows rewrote them
+# as a whole.
+* text=auto eol=lf
