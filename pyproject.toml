@@ -14,3 +14,14 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+# Training never requests a GPU, and the CUDA build makes the image many GB larger.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", marker = "sys_platform != 'darwin'" },
+]
