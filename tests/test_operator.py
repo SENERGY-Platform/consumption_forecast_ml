@@ -186,10 +186,9 @@ class TrainTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
         previous_uri = mlflow.get_tracking_uri()
-        mlflow.set_tracking_uri(
-            f"sqlite:///{Path(tmp.name, 'mlflow.db').as_posix()}"
-        )
+        mlflow.set_tracking_uri(Path(tmp.name).as_uri())
         self.addCleanup(mlflow.set_tracking_uri, previous_uri)
+        mlflow.set_experiment("test")
         operator = make_operator("H")
         receive(operator, "2026-01-14 12:00")
 
