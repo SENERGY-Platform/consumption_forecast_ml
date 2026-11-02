@@ -11,11 +11,20 @@ import build_models
 
 
 class FakeDartsModel:
+    def __init__(self, first=0):
+        self.first = first
+
     def predict(self, n):
-        return list(range(n))
+        return list(range(self.first, self.first + n))
 
 
-class ForecastingModelTest(unittest.TestCase):
+def forecaster(first=0):
+    return build_models.Forecaster(
+        FakeDartsModel(first), "prophet", False, pd.Timestamp("2026-01-14 10:00")
+    )
+
+
+class ForecastingModelsTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(tmp.cleanup)
@@ -30,19 +39,31 @@ class ForecastingModelTest(unittest.TestCase):
         mlflow.pyfunc.save_model(self.model_path, python_model=python_model)
         return mlflow.pyfunc.load_model(self.model_path)
 
-    def test_reloaded_model_predicts_requested_number_of_steps(self):
-        model = self.save_and_load(build_models.ProphetForecastingModel(
-            FakeDartsModel(), pd.Timestamp("2026-01-14 10:00"), "H"
-        ))
+    def test_reloaded_model_forecasts_with_the_requested_frequency(self):
+        model = self.save_and_load(build_models.ForecastingModels({
+            "H": forecaster(first=0),
+            "4H": forecaster(first=100),
+        }))
 
-        self.assertEqual(model.predict({"missing_steps": 3}), [0, 1, 2])
+        self.assertEqual(
+            model.predict({"missing_steps": 3, "timeseries_frequency": "4H"}),
+            [100, 101, 102],
+        )
 
-    def test_reloaded_model_keeps_its_timeseries_frequency(self):
-        model = self.save_and_load(build_models.NHitsForecastingModel(
-            FakeDartsModel(), pd.Timestamp("2026-01-14 10:00"), "4H"
-        ))
+    def test_reloaded_model_keeps_its_forecasters(self):
+        model = self.save_and_load(build_models.ForecastingModels({
+            "H": forecaster(),
+        }))
 
-        self.assertEqual(model.unwrap_python_model().timeseries_frequency, "4H")
+        reloaded = model.unwrap_python_model().forecasters["H"]
+        self.assertEqual(reloaded.model_type, "prophet")
+        self.assertEqual(reloaded.last_ts, pd.Timestamp("2026-01-14 10:00"))
+
+    def test_rejects_frequency_without_forecaster(self):
+        model = build_models.ForecastingModels({"H": forecaster()})
+
+        with self.assertRaises(ValueError):
+            model.predict({"missing_steps": 3, "timeseries_frequency": "D"})
 
     def test_predict_signature_is_accepted_by_mlflow(self):
         with warnings.catch_warnings(record=True) as caught:

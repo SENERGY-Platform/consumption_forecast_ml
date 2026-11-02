@@ -1,4 +1,4 @@
-from operator_lib.util import Config, MLOperator, logger
+from operator_lib.util import Config, Inputs, MLOperator, Outputs, logger
 from operator_lib.util.helpers import provide_historic_data, provide_historic_data_local, TrainMlflowLogger
 
 
@@ -8,38 +8,95 @@ import typing
 import datetime
 import mlflow
 from mlflow.pyfunc import PyFuncModel, PythonModel
+from build_models import ForecastingModels
 from process_inference_data import (
-    check_for_period_change,
     convert_inference_ds_to_ts,
-    get_period_end,
+    format_period_end,
     get_period_start,
+    get_raster_start,
 )
 from inference import (
     compute_single_output_total,
-    model_last_timestamp,
-    model_timeseries_frequency,
+    interval_duration,
+    model_forecasters,
     predict_multi_output,
     predict_single_output,
 )
 
-from training import MODEL_TYPES, train_forecasting_model
-from util import to_utc_naive_timestamp
+from training import MODEL_TYPES, train_forecasters
+from util import VALUE_COLUMN, to_utc_naive_timestamp
+
+
+def parse_time_periods(value: typing.Any) -> typing.List[str]:
+    periods = []
+    for period in str(value).split(","):
+        period = period.strip()
+        if not period or period in periods:
+            continue
+        if period not in Operator.period_single_or_multi_output:
+            raise ValueError(f"Unsupported time period: {period}")
+        periods.append(period)
+    if not periods:
+        raise ValueError(f"time_periods names no time period: {value!r}")
+    return periods
+
+
+def parse_bool(value: typing.Any) -> bool:
+    # Config values arrive as strings.
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes"):
+        return True
+    if text in ("false", "0", "no", ""):
+        return False
+    raise ValueError(f"Not a boolean: {value!r}")
+
 
 class CustomConfig(Config):
-    time_period = "H"
-    model_type = "prophet"
-    
+    time_periods: str = "D"
+    model: str = "prophet"
+    add_time_covariates: bool = False
+
     def __init__(self, d, **kwargs):
         super().__init__(d, **kwargs)
         # Validated here because operator-lib may start a training before
         # Operator.init gets to the configuration.
-        if self.time_period not in Operator.period_single_or_multi_output:
-            raise ValueError(f"Unsupported time period: {self.time_period}")
-        if self.model_type not in MODEL_TYPES:
-            raise ValueError(f"Unsupported model type: {self.model_type}")
-    
+        parse_time_periods(self.time_periods)
+        parse_bool(self.add_time_covariates)
+        if self.model not in MODEL_TYPES:
+            raise ValueError(f"Unsupported model type: {self.model}")
+
+
+class ConsumptionInputs(Inputs):
+    Consumption: float
+
+
+class ForecastOutputs(Outputs):
+    HourPrediction: float
+    HourPredictionTotal: float
+    HourTimestamp: str
+    FourHourPrediction: float
+    FourHourPredictionTotal: float
+    FourHourTimestamp: str
+    DayPrediction: float
+    DayPredictionTotal: float
+    DayTimestamp: str
+    WeekPrediction: float
+    WeekPredictionTotal: float
+    WeekTimestamp: str
+    MonthPrediction: float
+    MonthPredictionTotal: float
+    MonthTimestamp: str
+    YearPrediction: float
+    YearPredictionTotal: float
+    YearTimestamp: str
+
+
 class Operator(MLOperator):
     configType = CustomConfig
+    inputs = ConsumptionInputs
+    outputs = ForecastOutputs
     period_single_or_multi_output = {
         'H': 'H',
         # Hourly, so that the Berlin 4H blocks consist of whole intervals.
@@ -65,50 +122,40 @@ class Operator(MLOperator):
         'M': datetime.timedelta(days=2),
         'Y': datetime.timedelta(days=14),
     }
+    # Per timeseries frequency; periods sharing one share these as well.
     training_history_duration = {
         'H': datetime.timedelta(days=14),
         '4H': datetime.timedelta(days=14),
         'D': datetime.timedelta(days=14),
-        'W': datetime.timedelta(days=14),
-        'M': datetime.timedelta(days=14),
-        'Y': datetime.timedelta(days=365),
-    }
-    forecast_interval_duration = {
-        'H': datetime.timedelta(hours=1),
-        '4H': datetime.timedelta(hours=4),
-        'D': datetime.timedelta(days=1),
-        'W': datetime.timedelta(days=7),
+        'W': datetime.timedelta(days=365),
     }
     retraining_intervals = {
         'H': datetime.timedelta(days=1),
         '4H': datetime.timedelta(days=1),
-        'D': datetime.timedelta(days=1),
-        'W': datetime.timedelta(days=7),
-        'M': datetime.timedelta(days=7),
-        'Y': datetime.timedelta(days=28),
+        'D': datetime.timedelta(days=7),
+        'W': datetime.timedelta(days=28),
     }
     training_retry_delay = datetime.timedelta(hours=1)
 
     def init(self, *args, **kwargs):
         super().init(*args, **kwargs)
-        
-        self.period = self.config.time_period
 
-        logger.info(self.period)
+        self.periods = parse_time_periods(self.config.time_periods)
 
-        self.timeseries_frequency = self.period_single_or_multi_output[self.period]
+        logger.info(self.periods)
 
         self.last_timestamp = None
-        self.last_predicted_period_start = None
-        self.timedelta_for_inference_data = self.inference_history_duration[self.period]
+        # Per period: (period start, raster interval start) of the latest
+        # forecast, and that forecast's output fields.
+        self.forecast_keys = {}
+        self.latest_outputs = {}
 
-        self.period_changed = False
         self.current_message_ignored = False
 
 
     def infer(self, model: typing.Optional[PyFuncModel], data: typing.Dict[str, typing.Any], selector: str, device_id: str, timestamp: datetime.datetime) -> typing.Tuple[typing.Optional[datetime.datetime], typing.Optional[typing.Any], typing.Optional[PythonModel]]:
         self.current_message_ignored = False
-        current_value = data.get("value")
+        current_value = data.get(VALUE_COLUMN)
         if current_value is None:
             self.current_message_ignored = True
             return None, None, None
@@ -127,18 +174,8 @@ class Operator(MLOperator):
             )
             return None, None, None
 
-        previous_timestamp = self.last_timestamp
         self.timestamp = current_timestamp
         self.last_timestamp = current_timestamp
-
-        if previous_timestamp is None:
-            self.period_changed = False
-        else:
-            self.period_changed = check_for_period_change(
-                current_timestamp,
-                previous_timestamp,
-                self.period,
-            )
 
         logger.debug(f"Time: {self.timestamp}, Value: {current_value}")
 
@@ -147,106 +184,150 @@ class Operator(MLOperator):
             "value": float(current_value),
         }
 
-        current_period_start = get_period_start(self.timestamp, self.period)
-        should_predict = (
-            model is not None
-            and self.model_fits_period(model)
-            and current_period_start
-            != getattr(self, "last_predicted_period_start", None)
-        )
-
-        if self.period_changed:
-            logger.debug(
-                f"Period changed! New {self.period_translation_dict[self.period]} "
-                f"started at {self.timestamp}"
-            )
-
-        if should_predict:
+        due_periods = self.periods_due_for_forecast(model)
+        multi_output_periods = [
+            period for period in due_periods
+            if self.period_single_or_multi_output[period] != period
+        ]
+        inference_datasets = None
+        if multi_output_periods:
             try:
-                if self.timeseries_frequency == self.period:
-                    forecast = predict_single_output(
-                        model,
-                        payload,
-                        self.timeseries_frequency,
-                        self.period,
-                    )
-                else:
-                    inference_history_duration = (
-                        self.get_inference_history_duration(current_period_start)
-                    )
-                    inference_datasets = provide_historic_data_local(
-                        inference_history_duration
-                    )
-                    inference_timeseries = convert_inference_ds_to_ts(
-                        inference_datasets,
-                        self.timeseries_frequency,
-                    )
-                    logger.debug(
-                        "Last timestamp of inference timeseries for multi "
-                        f"output prediction: {inference_timeseries.time_index[-1]}"
-                    )
-                    forecast = predict_multi_output(
-                        model,
-                        payload,
-                        self.timeseries_frequency,
-                        self.period,
-                        inference_timeseries,
-                    )
+                inference_datasets = provide_historic_data_local(max(
+                    self.get_inference_history_duration(period)
+                    for period in multi_output_periods
+                ))
+            except Exception:
+                logger.exception("Loading the inference history failed!")
+                due_periods = [
+                    period for period in due_periods
+                    if period not in multi_output_periods
+                ]
 
-                predicted_value = forecast.period_consumption
-                predicted_total = compute_single_output_total(
-                    forecast.remaining_consumption,
-                    payload["value"],
-                )
-                output_timestamp = (
-                    get_period_end(self.timestamp, self.period)
-                    .floor("us")
-                    .to_pydatetime()
-                )
-                logger.debug(
-                    f"Predicted consumption: {predicted_value} for next "
-                    f"{self.period} at timestamp: {output_timestamp}"
-                )
-                self.last_predicted_period_start = current_period_start
-                return (
-                    output_timestamp,
-                    {
-                        f'{self.period_translation_dict[self.period]}Prediction': predicted_value,
-                        f'{self.period_translation_dict[self.period]}PredictionTotal': predicted_total,
-                    },
-                    None,
+        inference_timeseries = {}
+        updated = False
+        for period in due_periods:
+            try:
+                self.latest_outputs[period] = self.forecast_period(
+                    model,
+                    payload,
+                    period,
+                    inference_datasets,
+                    inference_timeseries,
                 )
             except Exception:
-                logger.exception("Prediction failed!")
-        return None, None, None
+                logger.exception(f"Prediction for {period} failed!")
+                continue
+            self.forecast_keys[period] = self.forecast_key(period)
+            updated = True
 
-    def get_inference_history_duration(self, current_period_start):
-        elapsed_in_period = (
-            self.timestamp - current_period_start
-        ).to_pytimedelta()
-        interval_duration = self.forecast_interval_duration[
-            self.timeseries_frequency
-        ]
-        return max(
-            self.timedelta_for_inference_data,
-            elapsed_in_period + interval_duration,
+        if not updated:
+            return None, None, None
+
+        output = self.current_outputs()
+        logger.debug(f"Operator output at {self.timestamp}: {output}")
+        return self.timestamp.to_pydatetime(), output, None
+
+    def forecast_key(self, period: str):
+        timeseries_frequency = self.period_single_or_multi_output[period]
+        return (
+            get_period_start(self.timestamp, period),
+            get_raster_start(self.timestamp, timeseries_frequency),
         )
 
-    def train(self, _: typing.Optional[PyFuncModel], mlflow_logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
-        self.last_training_attempt = time.monotonic()
-        period = self.config.time_period
-        try:
-            datasets = provide_historic_data(
-                self.training_history_duration[period]
+    def periods_due_for_forecast(self, model: typing.Optional[PyFuncModel]) -> typing.List[str]:
+        # Like the old operator, a period is forecast again whenever its raster
+        # moves on; here also as soon as the period itself starts.
+        forecasters = self.usable_forecasters(model)
+        return [
+            period for period in self.periods
+            if self.period_single_or_multi_output[period] in forecasters
+            and self.forecast_keys.get(period) != self.forecast_key(period)
+        ]
+
+    def forecast_period(self, model, payload, period, inference_datasets, inference_timeseries) -> typing.Dict[str, typing.Any]:
+        timeseries_frequency = self.period_single_or_multi_output[period]
+        if timeseries_frequency == period:
+            forecast = predict_single_output(
+                model,
+                payload,
+                timeseries_frequency,
+                period,
             )
-            if len(datasets) == 0:
-                raise RuntimeError("Expected at least one ray Dataset!")
-            return ray.get(train_forecasting_model.remote(
-                datasets,
-                self.config.model_type,
-                self.period_single_or_multi_output[period],
-                mlflow_logger,
-            ))
+        else:
+            if timeseries_frequency not in inference_timeseries:
+                inference_timeseries[timeseries_frequency] = convert_inference_ds_to_ts(
+                    inference_datasets,
+                    timeseries_frequency,
+                )
+            forecast = predict_multi_output(
+                model,
+                payload,
+                timeseries_frequency,
+                period,
+                inference_timeseries[timeseries_frequency],
+            )
+
+        name = self.period_translation_dict[period]
+        return {
+            f'{name}Prediction': forecast.period_consumption,
+            f'{name}PredictionTotal': compute_single_output_total(
+                forecast.remaining_consumption,
+                payload["value"],
+            ),
+            f'{name}Timestamp': format_period_end(self.timestamp, period),
+        }
+
+    def current_outputs(self) -> typing.Dict[str, typing.Any]:
+        # Every period with a forecast for the period it is in, like the old
+        # operator sent them.
+        output = {}
+        for period in self.periods:
+            key = self.forecast_keys.get(period)
+            if key is not None and key[0] == get_period_start(self.timestamp, period):
+                output.update(self.latest_outputs[period])
+        return output
+
+    def get_inference_history_duration(self, period: str) -> datetime.timedelta:
+        elapsed_in_period = (
+            self.timestamp - get_period_start(self.timestamp, period)
+        ).to_pytimedelta()
+        timeseries_frequency = self.period_single_or_multi_output[period]
+        return max(
+            self.inference_history_duration[period],
+            elapsed_in_period
+            + interval_duration(timeseries_frequency).to_pytimedelta(),
+        )
+
+    def train(self, model: typing.Optional[PyFuncModel], mlflow_logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
+        self.last_training_attempt = time.monotonic()
+        frequencies_to_train = self.frequencies_to_train(model)
+        needed_frequencies = self.timeseries_frequencies()
+        forecasters = {
+            timeseries_frequency: forecaster
+            for timeseries_frequency, forecaster in self.usable_forecasters(model).items()
+            if timeseries_frequency in needed_frequencies
+            and timeseries_frequency not in frequencies_to_train
+        }
+
+        # One history read per duration, so a yearly forecast does not make the
+        # daily retraining read a year.
+        groups = {}
+        for timeseries_frequency in frequencies_to_train:
+            history_duration = self.training_history_duration[timeseries_frequency]
+            groups.setdefault(history_duration, []).append(timeseries_frequency)
+
+        try:
+            for history_duration, timeseries_frequencies in groups.items():
+                datasets = provide_historic_data(history_duration)
+                if len(datasets) == 0:
+                    raise RuntimeError("Expected at least one ray Dataset!")
+                forecasters.update(ray.get(train_forecasters.remote(
+                    datasets,
+                    self.config.model,
+                    timeseries_frequencies,
+                    parse_bool(self.config.add_time_covariates),
+                    mlflow_logger,
+                )))
         except Exception:
             # Raising would stop the operator. Keep the current model and
             # retry later instead.
@@ -255,6 +336,7 @@ class Operator(MLOperator):
                 self.training_retry_delay,
             )
             return None
+        return ForecastingModels(forecasters)
 
     def need_retraining(self, model: typing.Optional[PyFuncModel]) -> bool:
         if getattr(self, "current_message_ignored", False):
@@ -263,7 +345,7 @@ class Operator(MLOperator):
         if not hasattr(self, "timestamp"):
             return False
 
-        if not self.model_is_outdated(model):
+        if not self.frequencies_to_train(model):
             return False
 
         if self.training_attempted_recently():
@@ -275,22 +357,38 @@ class Operator(MLOperator):
             mlflow.end_run(status="FAILED")
         return True
 
-    def model_is_outdated(self, model: typing.Optional[PyFuncModel]) -> bool:
-        if model is None or not self.model_fits_period(model):
-            return True
+    def timeseries_frequencies(self) -> typing.List[str]:
+        # From the config rather than self.periods: operator-lib trains in its
+        # init, before Operator.init has set them.
+        periods = parse_time_periods(self.config.time_periods)
+        return list(dict.fromkeys(
+            self.period_single_or_multi_output[period] for period in periods
+        ))
 
-        last_ts_model = model_last_timestamp(model)
-        return (
-            self.timestamp - last_ts_model
-            >= self.retraining_intervals[self.period]
-        )
+    def usable_forecasters(self, model: typing.Optional[PyFuncModel]) -> typing.Dict[str, typing.Any]:
+        if model is None:
+            return {}
+        add_time_covariates = parse_bool(self.config.add_time_covariates)
+        return {
+            timeseries_frequency: forecaster
+            for timeseries_frequency, forecaster in model_forecasters(model).items()
+            if forecaster.model_type == self.config.model
+            and forecaster.add_time_covariates == add_time_covariates
+        }
 
-    def model_fits_period(self, model: PyFuncModel) -> bool:
-        timeseries_frequency = model_timeseries_frequency(model)
-        if timeseries_frequency is None:
-            # Older models used the same frequencies, except for 4H.
-            return self.period != "4H"
-        return timeseries_frequency == self.timeseries_frequency
+    def frequencies_to_train(self, model: typing.Optional[PyFuncModel]) -> typing.List[str]:
+        forecasters = self.usable_forecasters(model)
+        timestamp = getattr(self, "timestamp", None)
+        frequencies = []
+        for timeseries_frequency in self.timeseries_frequencies():
+            forecaster = forecasters.get(timeseries_frequency)
+            if forecaster is None or (
+                timestamp is not None
+                and timestamp - to_utc_naive_timestamp(forecaster.last_ts)
+                >= self.retraining_intervals[timeseries_frequency]
+            ):
+                frequencies.append(timeseries_frequency)
+        return frequencies
 
     def training_attempted_recently(self) -> bool:
         last_attempt = getattr(self, "last_training_attempt", None)

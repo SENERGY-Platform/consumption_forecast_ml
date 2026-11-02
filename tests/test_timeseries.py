@@ -3,20 +3,15 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from fakes import FakeDataset
 from util import convert_dataset_to_timeseries, parse_row
 
 
-class FakeDataset:
-    """Stands in for a ray Dataset, of which only to_pandas() is used."""
-
-    def __init__(self, timestamps, values):
-        self.df = pd.DataFrame({
-            "ts": pd.DatetimeIndex(timestamps).astype("int64") / 1e9,
-            "value": values,
-        })
-
-    def to_pandas(self):
-        return self.df.copy()
+def parsed_rows(timestamps, values):
+    return FakeDataset(
+        {"ts": time.timestamp(), "value": value}
+        for time, value in zip(pd.DatetimeIndex(timestamps).tz_localize("UTC"), values)
+    )
 
 
 class ConvertDatasetToTimeseriesTest(unittest.TestCase):
@@ -24,9 +19,7 @@ class ConvertDatasetToTimeseriesTest(unittest.TestCase):
         timestamps = pd.date_range("2026-01-14 10:07", periods=24, freq="15min")
         values = np.arange(len(timestamps)) * 0.25
 
-        series = convert_dataset_to_timeseries(
-            FakeDataset(timestamps, values), "H"
-        )
+        series = convert_dataset_to_timeseries(parsed_rows(timestamps, values), "H")
 
         self.assertEqual(series.time_index[0], pd.Timestamp("2026-01-14 11:00"))
         np.testing.assert_allclose(series.univariate_values(), [1.0] * 4)
@@ -35,7 +28,7 @@ class ConvertDatasetToTimeseriesTest(unittest.TestCase):
         timestamps = pd.date_range("2026-01-14 01:00", periods=24, freq="h")
 
         series = convert_dataset_to_timeseries(
-            FakeDataset(timestamps, np.arange(24.0)), "4H"
+            parsed_rows(timestamps, np.arange(24.0)), "4H"
         )
 
         self.assertEqual(
@@ -48,9 +41,7 @@ class ConvertDatasetToTimeseriesTest(unittest.TestCase):
         timestamps = pd.date_range("2026-01-14 00:00", periods=8, freq="h")
         values = [0.0, 1.0, 2.0, 3.0, 4.0, 0.0, 1.0, 2.0]
 
-        series = convert_dataset_to_timeseries(
-            FakeDataset(timestamps, values), "H"
-        )
+        series = convert_dataset_to_timeseries(parsed_rows(timestamps, values), "H")
 
         np.testing.assert_allclose(series.univariate_values(), [1.0] * 7)
 
@@ -58,14 +49,12 @@ class ConvertDatasetToTimeseriesTest(unittest.TestCase):
         timestamps = pd.DatetimeIndex(["2026-01-14 10:15", "2026-01-14 10:45"])
 
         with self.assertRaises(RuntimeError):
-            convert_dataset_to_timeseries(
-                FakeDataset(timestamps, [1.0, 2.0]), "H"
-            )
+            convert_dataset_to_timeseries(parsed_rows(timestamps, [1.0, 2.0]), "H")
 
 
 class ParseRowTest(unittest.TestCase):
-    def test_reads_time_column_as_utc_epoch_seconds(self):
-        row = {"time": pd.Timestamp("2026-01-14 12:00"), "value": "3.5"}
+    def test_reads_consumption_with_time_as_utc_epoch_seconds(self):
+        row = {"time": pd.Timestamp("2026-01-14 12:00"), "Consumption": "3.5"}
 
         self.assertEqual(
             parse_row(row),
@@ -75,8 +64,8 @@ class ParseRowTest(unittest.TestCase):
             }],
         )
 
-    def test_skips_rows_without_value(self):
-        row = {"time": pd.Timestamp("2026-01-14 12:00"), "value": None}
+    def test_skips_rows_without_consumption(self):
+        row = {"time": pd.Timestamp("2026-01-14 12:00"), "Consumption": None}
 
         self.assertEqual(parse_row(row), [])
 

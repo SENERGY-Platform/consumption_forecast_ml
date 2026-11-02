@@ -1,13 +1,10 @@
+import dataclasses
 import numbers
 import typing
 
 import pandas as pd
 
 from mlflow.pyfunc import PythonModel
-
-
-from darts.models.forecasting.nhits import NHiTSModel
-from darts.models.forecasting.prophet_model import Prophet
 
 
 def get_missing_steps(data: typing.Any) -> int:
@@ -25,31 +22,31 @@ def get_missing_steps(data: typing.Any) -> int:
 
 
 
-class NHitsForecastingModel(PythonModel):
-    def __init__(
-        self,
-        model: NHiTSModel,
-        last_ts: pd.Timestamp,
-        timeseries_frequency: str,
-    ) -> None:
-        self.model = model
-        self.last_ts = last_ts
-        self.timeseries_frequency = timeseries_frequency
+@dataclasses.dataclass(frozen=True)
+class Forecaster:
+    """A fitted darts model for one timeseries frequency."""
+
+    model: typing.Any
+    model_type: str
+    add_time_covariates: bool
+    last_ts: pd.Timestamp
+
+
+class ForecastingModels(PythonModel):
+    """
+    The operator's MLflow model: one forecaster per timeseries frequency, so
+    that one operator forecasts several periods.
+    """
+
+    def __init__(self, forecasters: typing.Dict[str, Forecaster]) -> None:
+        self.forecasters = forecasters
 
     def predict(self, model_input):
-        return self.model.predict(get_missing_steps(model_input))
-
-class ProphetForecastingModel(PythonModel):
-    def __init__(
-        self,
-        model: Prophet,
-        last_ts: pd.Timestamp,
-        timeseries_frequency: str,
-    ) -> None:
-        self.model = model
-        self.last_ts = last_ts
-        self.timeseries_frequency = timeseries_frequency
-
-    def predict(self, model_input):
-        return self.model.predict(get_missing_steps(model_input))
-
+        missing_steps = get_missing_steps(model_input)
+        timeseries_frequency = model_input.get("timeseries_frequency")
+        forecaster = self.forecasters.get(timeseries_frequency)
+        if forecaster is None:
+            raise ValueError(
+                f"No forecaster for timeseries frequency {timeseries_frequency!r}."
+            )
+        return forecaster.model.predict(missing_steps)

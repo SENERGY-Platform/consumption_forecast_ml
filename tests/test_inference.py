@@ -4,6 +4,7 @@ import darts
 import numpy as np
 import pandas as pd
 
+from fakes import FakeForecaster, FakeModel
 from inference import (
     compute_output_nr,
     compute_period_forecast,
@@ -18,23 +19,6 @@ def series(start, freq, values):
     return darts.TimeSeries.from_times_and_values(
         index, np.asarray(values, dtype=float)
     )
-
-
-class FakeModel:
-    """Stands in for the MLflow model: forecasts the given values after last_ts."""
-
-    def __init__(self, last_ts, freq, values):
-        self.last_ts = pd.Timestamp(last_ts)
-        self.freq = freq
-        self.values = values
-
-    def unwrap_python_model(self):
-        return self
-
-    def predict(self, data):
-        steps = data["missing_steps"]
-        start = self.last_ts + pd.tseries.frequencies.to_offset(self.freq)
-        return series(start, self.freq, self.values[:steps])
 
 
 class ComputeOutputNrTest(unittest.TestCase):
@@ -80,7 +64,8 @@ class PredictSingleOutputTest(unittest.TestCase):
     payload = {"timestamp": pd.Timestamp("2026-01-14 14:15"), "value": 100.0}
 
     def test_returns_current_hour_and_its_remaining_part(self):
-        model = FakeModel("2026-01-14 09:00", "h", [9.0, 9.0, 9.0, 9.0, 2.0])
+        model = FakeModel({"H": FakeForecaster(
+            "2026-01-14 09:00", values=[9.0, 9.0, 9.0, 9.0, 2.0])})
 
         forecast = predict_single_output(model, self.payload, "H", "H")
 
@@ -88,7 +73,8 @@ class PredictSingleOutputTest(unittest.TestCase):
         self.assertAlmostEqual(forecast.remaining_consumption, 1.5)
 
     def test_counts_negative_forecasts_as_zero(self):
-        model = FakeModel("2026-01-14 09:00", "h", [1.0, 1.0, 1.0, 1.0, -3.0])
+        model = FakeModel({"H": FakeForecaster(
+            "2026-01-14 09:00", values=[1.0, 1.0, 1.0, 1.0, -3.0])})
 
         forecast = predict_single_output(model, self.payload, "H", "H")
 
@@ -121,7 +107,8 @@ class PredictMultiOutputTest(unittest.TestCase):
     def test_four_hour_block_on_hourly_raster_has_no_partial_hours(self):
         # 23:30 UTC is 00:30 in Berlin: the block runs from 23:00 to 03:00 UTC.
         # The model forecasts the hours 11:00 to 02:00 with values 0 to 15.
-        model = FakeModel("2026-01-13 10:00", "h", [float(i) for i in range(16)])
+        model = FakeModel({"H": FakeForecaster(
+            "2026-01-13 10:00", values=[float(i) for i in range(16)])})
         measured = series("2026-01-13 21:00", "h", [2.0, 2.0])
 
         forecast = predict_multi_output(

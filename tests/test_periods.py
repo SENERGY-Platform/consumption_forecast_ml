@@ -3,9 +3,10 @@ import unittest
 import pandas as pd
 
 from process_inference_data import (
-    check_for_period_change,
+    format_period_end,
     get_period_bounds,
     get_period_end,
+    get_raster_start,
 )
 
 
@@ -97,24 +98,36 @@ class GetPeriodEndTest(unittest.TestCase):
         )
 
 
-class CheckForPeriodChangeTest(unittest.TestCase):
-    def test_day_changes_at_berlin_midnight(self):
-        self.assertTrue(
-            check_for_period_change(
-                pd.Timestamp("2026-01-14 23:01"),
-                pd.Timestamp("2026-01-14 22:59"),
-                "D",
-            )
+class FormatPeriodEndTest(unittest.TestCase):
+    def test_writes_end_of_berlin_day_in_utc_in_old_operator_format(self):
+        self.assertEqual(
+            format_period_end(pd.Timestamp("2026-01-14 12:00"), "D"),
+            "2026-01-14 22:59:59",
         )
 
-    def test_day_does_not_change_at_utc_midnight(self):
-        self.assertFalse(
-            check_for_period_change(
-                pd.Timestamp("2026-01-15 00:01"),
-                pd.Timestamp("2026-01-14 23:59"),
-                "D",
-            )
+
+class GetRasterStartTest(unittest.TestCase):
+    def assertRasterStart(self, timestamp, timeseries_frequency, start):
+        self.assertEqual(
+            get_raster_start(pd.Timestamp(timestamp), timeseries_frequency),
+            pd.Timestamp(start),
         )
+
+    def test_hourly_raster_starts_at_full_hour(self):
+        self.assertRasterStart("2026-01-14 13:30", "H", "2026-01-14 13:00")
+
+    def test_four_hour_raster_is_aligned_to_utc_midnight(self):
+        self.assertRasterStart("2026-01-14 23:30", "4H", "2026-01-14 20:00")
+
+    def test_daily_raster_starts_at_utc_midnight(self):
+        self.assertRasterStart("2026-01-14 23:30", "D", "2026-01-14 00:00")
+
+    def test_weekly_raster_starts_on_sunday(self):
+        # Wednesday 14 Jan 2026; the resampled weekly series runs from Sunday.
+        self.assertRasterStart("2026-01-14 12:00", "W", "2026-01-11 00:00")
+
+    def test_weekly_raster_on_sunday_starts_that_day(self):
+        self.assertRasterStart("2026-01-11 12:00", "W", "2026-01-11 00:00")
 
 
 if __name__ == "__main__":

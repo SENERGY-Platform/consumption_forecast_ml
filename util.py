@@ -12,6 +12,10 @@ FREQUENCY_ALIASES = {
     "4H": "4h",
 }
 
+# The operator input carrying the meter reading. Historic data has a column of
+# the same name, since operator-lib names columns after the input.
+VALUE_COLUMN = "Consumption"
+
 
 def to_utc_timestamp(value: typing.Any) -> pd.Timestamp:
     if isinstance(value, (int, float)):
@@ -36,7 +40,7 @@ def to_epoch_seconds(value: typing.Any) -> float:
 
 def extract_timestamp_and_value(row: typing.Dict[str, typing.Any]) -> typing.Optional[typing.Tuple[float, float]]:
     ts = row.get("timestamp", row.get("time", row.get("ts")))
-    value = row.get("value")
+    value = row.get(VALUE_COLUMN)
     if ts is None or value is None:
         return None
     return to_epoch_seconds(ts), float(value)

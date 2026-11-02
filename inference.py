@@ -32,13 +32,9 @@ def unwrap_model(model):
     return model.unwrap_python_model()
 
 
-def model_last_timestamp(model) -> pd.Timestamp:
-    return to_utc_naive_timestamp(unwrap_model(model).last_ts)
-
-
-def model_timeseries_frequency(model) -> typing.Optional[str]:
-    # Models trained before the frequency was stored don't have it.
-    return getattr(unwrap_model(model), "timeseries_frequency", None)
+def model_forecasters(model) -> typing.Dict[str, typing.Any]:
+    # Models of earlier versions of this operator hold no forecasters.
+    return getattr(unwrap_model(model), "forecasters", None) or {}
 
 
 def interval_duration(small_period) -> pd.Timedelta:
@@ -122,10 +118,11 @@ def predict_values_through_current_period(
     timeseries_frequency,
     target_period,
 ):
+    forecaster = model_forecasters(model)[timeseries_frequency]
     missing_steps = compute_output_nr(
         timeseries_frequency,
         target_period,
-        model_last_timestamp(model),
+        forecaster.last_ts,
         payload["timestamp"],
     )
     if missing_steps < 1:
@@ -133,7 +130,10 @@ def predict_values_through_current_period(
             "The model already ends at or after the requested forecast period."
         )
 
-    predicted_values = model.predict({"missing_steps": missing_steps})
+    predicted_values = model.predict({
+        "missing_steps": missing_steps,
+        "timeseries_frequency": timeseries_frequency,
+    })
     return (predicted_values + abs(predicted_values)) / 2
 
 

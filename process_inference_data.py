@@ -3,6 +3,7 @@ import ray
 from util import (
     convert_dataset_to_timeseries,
     parse_row,
+    to_utc_naive_timestamp,
     to_utc_timestamp,
 )
 import darts
@@ -16,6 +17,12 @@ PERIOD_FREQUENCIES = {
     "W": "W-SUN",
     "M": "M",
     "Y": "Y-DEC",
+}
+
+RASTER_FREQUENCIES = {
+    "H": "h",
+    "4H": "4h",
+    "D": "D",
 }
 
 
@@ -53,12 +60,6 @@ def get_period_bounds(timestamp, period):
     return local_to_utc_naive(period_start), local_to_utc_naive(period_end)
 
 
-def check_for_period_change(timestamp, last_timestamp, period):
-    current_period_start, _ = get_period_bounds(timestamp, period)
-    previous_period_start, _ = get_period_bounds(last_timestamp, period)
-    return current_period_start != previous_period_start
-
-
 def get_period_start(timestamp, period) -> pd.Timestamp:
     period_start, _ = get_period_bounds(timestamp, period)
     return period_start
@@ -67,6 +68,25 @@ def get_period_start(timestamp, period) -> pd.Timestamp:
 def get_period_end(timestamp, period) -> pd.Timestamp:
     _, period_end_exclusive = get_period_bounds(timestamp, period)
     return period_end_exclusive - pd.Timedelta(nanoseconds=1)
+
+
+def format_period_end(timestamp, period) -> str:
+    # The format of the old operator's <Period>Timestamp outputs, in UTC.
+    return get_period_end(timestamp, period).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_raster_start(timestamp, timeseries_frequency) -> pd.Timestamp:
+    """Start of the UTC interval of the forecasting raster containing timestamp."""
+    current_timestamp = to_utc_naive_timestamp(timestamp)
+    if timeseries_frequency == "W":
+        # Weekly intervals run from Sunday to Sunday, like the resampled series.
+        day = current_timestamp.normalize()
+        return day - pd.Timedelta(days=(day.dayofweek + 1) % 7)
+
+    frequency = RASTER_FREQUENCIES.get(timeseries_frequency)
+    if frequency is None:
+        raise ValueError(f"Unsupported forecast frequency: {timeseries_frequency}")
+    return current_timestamp.floor(frequency)
 
 def convert_inference_ds_to_ts(ds: typing.List[ray.ObjectRef[ray.data.Dataset]], time_series_frequency: str) -> darts.TimeSeries:
     parsed_datasets: typing.List[ray.data.Dataset] = []
