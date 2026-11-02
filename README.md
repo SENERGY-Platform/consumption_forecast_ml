@@ -56,8 +56,10 @@ das erste und letzte Intervall einer Periode.
 Die Schnittstelle ist in `op.py` deklariert (`ConsumptionInputs`,
 `ForecastOutputs`, `CustomConfig`). Daraus erzeugt
 `uv run python -m operator_lib manifest op.py` die Datei
-`operator-manifest.json` mit Eingängen, Ausgaben und Konfiguration für den
-Eintrag in der Plattform.
+`operator-manifest.json`; die CI tut das vor jedem Release und committet sie.
+Der Operator ist geteilter Content: `operators/consumption_forecast_v3.json`
+im Repo `platform-content` nennt Version und `source_repository`, Eingänge,
+Ausgaben und Konfiguration liest das Werkzeug aus dem Manifest dieser Version.
 
 ## Training und Betrieb
 
@@ -78,12 +80,12 @@ den Operator deshalb mit `uv run`.
 
 ## Image
 
-Jeder Push auf `master` baut
+Jeder Push auf `master` führt die Tests aus und baut
 `ghcr.io/senergy-platform/consumption-forecast-operator:vX.Y.Z`. Die Version
 ergibt sich aus den Conventional Commits seit dem letzten Versions-Tag. Das
 Repo löst `SENERGY-Platform/consumption_forecast` ab, dessen Image-Reihe bei
-v1.0.1 endete, und beginnt deshalb mit v2.0.0. `:prod` zeigt bis zur Umstellung
-des Operator-Eintrags in der Plattform noch auf den alten Operator.
+v1.0.1 endete, und beginnt deshalb mit v2.0.0. Ein `:prod` wird nicht gebaut:
+Die Plattform nennt immer eine feste Version.
 
 ## Lokale Entwicklung
 
