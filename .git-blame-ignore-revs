@@ -1,0 +1,6 @@
+# Commits that only reformat and should be skipped by git blame. GitHub picks
+# this file up automatically; locally run once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# chore: normalize line endings to LF
+840fe79e4ca13b423d2da3b63c5bf91c7449be3d
