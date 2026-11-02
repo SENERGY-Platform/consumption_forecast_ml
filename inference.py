@@ -1,3 +1,4 @@
+import typing
 from dataclasses import dataclass
 
 import pandas as pd
@@ -33,6 +34,11 @@ def unwrap_model(model):
 
 def model_last_timestamp(model) -> pd.Timestamp:
     return to_utc_naive_timestamp(unwrap_model(model).last_ts)
+
+
+def model_timeseries_frequency(model) -> typing.Optional[str]:
+    # Models trained before the frequency was stored don't have it.
+    return getattr(unwrap_model(model), "timeseries_frequency", None)
 
 
 def interval_duration(small_period) -> pd.Timedelta:
@@ -242,19 +248,3 @@ def compute_period_forecast(
         period_consumption=actual_consumption + forecast_consumption,
         remaining_consumption=remaining_consumption,
     )
-
-
-def compute_period_pred(
-    predicted_series,
-    true_values_series,
-    target_period,
-    current_timestamp,
-    small_period=None,
-):
-    return compute_period_forecast(
-        predicted_series,
-        true_values_series,
-        target_period,
-        current_timestamp,
-        small_period,
-    ).period_consumption

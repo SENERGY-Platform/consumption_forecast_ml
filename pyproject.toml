@@ -12,8 +12,5 @@ dependencies = [
   "prophet>=1.1.1"
 ]
 
-[global]
-extra-index-url = "https://download.pytorch.org/whl/cpu"
-
 [tool.uv]
 package = false

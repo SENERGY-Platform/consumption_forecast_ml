@@ -6,7 +6,7 @@ import ray
 
 from mlflow.pyfunc import PythonModel
 
-from util import extract_timestamp_and_value, convert_dataset_to_timeseries
+from util import convert_dataset_to_timeseries, parse_row
 from operator_lib.util import logger
 from operator_lib.util.helpers import TrainMlflowLogger
 
@@ -16,6 +16,8 @@ from darts.models.forecasting.prophet_model import Prophet
 
 from build_models import NHitsForecastingModel, ProphetForecastingModel
 
+
+MODEL_TYPES = ("prophet", "nhits")
 
 NHITS_INPUT_CHUNK_LENGTH = 7
 NHITS_OUTPUT_CHUNK_LENGTH = 1
@@ -38,18 +40,7 @@ def minimum_training_points(model_type: str) -> int:
     if model_type == "nhits":
         return NHITS_INPUT_CHUNK_LENGTH + NHITS_OUTPUT_CHUNK_LENGTH
     return 3
-    
-def parse_row(row):
-    parsed = extract_timestamp_and_value(row)
 
-    if parsed is None:
-        return []
-
-    return [{
-        "ts": parsed[0],
-        "value": parsed[1],
-    }]
-    
 @ray.remote
 def train_forecasting_model(ds: typing.List[ray.ObjectRef[ray.data.Dataset]], 
                             model_type: str,
@@ -124,6 +115,8 @@ def train_forecasting_model(ds: typing.List[ray.ObjectRef[ray.data.Dataset]],
         model.fit(training_timeseries)
 
         if model_type == "nhits":
-            return NHitsForecastingModel(model, pd.Timestamp(last_ts))
+            return NHitsForecastingModel(
+                model, pd.Timestamp(last_ts), time_series_frequency)
         else:
-            return ProphetForecastingModel(model, pd.Timestamp(last_ts))
+            return ProphetForecastingModel(
+                model, pd.Timestamp(last_ts), time_series_frequency)

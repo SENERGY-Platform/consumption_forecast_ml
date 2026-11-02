@@ -20,6 +20,17 @@ Die Ausgabe enthält je nach `time_period` beispielsweise
 `HourPrediction` und `HourPredictionTotal`. Der Ausgabezeitstempel ist das Ende
 des prognostizierten Zeitraums.
 
+Die Zeiträume werden nach deutscher Zeit (`Europe/Berlin`) abgegrenzt: Ein Tag
+beginnt um 00:00 Uhr Ortszeit, eine Woche am Montag, 4H-Blöcke um 00, 04, 08 …
+Uhr. An den Tagen der Zeitumstellung dauert ein Tag 23 bzw. 25 Stunden.
+Zeitstempel werden weiterhin in UTC ausgegeben.
+
+Die Modelle prognostizieren den Verbrauch in einem festen UTC-Raster: stündlich
+für `H` und `4H`, in 4-Stunden-Blöcken für `D`, täglich für `W` und `M`,
+wöchentlich für `Y`. Ragt ein Rasterintervall über eine Periodengrenze, wird es
+zeitanteilig aufgeteilt. Das betrifft nur `D`, `W`, `M` und `Y` und auch dort nur
+das erste und letzte Intervall einer Periode.
+
 ## Training und Betrieb
 
 Das Training wird regelmäßig über eine Ray-Remote-Funktion im konfigurierten
@@ -32,5 +43,11 @@ Lokaler Start mit Python 3.10.20 und `uv`:
 ```shell
 uv sync
 uv run python main.py
+```
+
+Tests:
+
+```shell
+uv run python -m unittest discover -s tests
 ```
 

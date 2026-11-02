@@ -2,15 +2,16 @@ import typing
 import ray
 from util import (
     convert_dataset_to_timeseries,
-    extract_timestamp_and_value,
-    to_utc_naive_timestamp,
+    parse_row,
+    to_utc_timestamp,
 )
 import darts
 import pandas as pd
 
 
+PERIOD_TIMEZONE = "Europe/Berlin"
+
 PERIOD_FREQUENCIES = {
-    "H": "h",
     "D": "D",
     "W": "W-SUN",
     "M": "M",
@@ -18,21 +19,38 @@ PERIOD_FREQUENCIES = {
 }
 
 
+def local_to_utc_naive(timestamp: pd.Timestamp) -> pd.Timestamp:
+    return (
+        timestamp.tz_localize(PERIOD_TIMEZONE)
+        .tz_convert("UTC")
+        .tz_localize(None)
+    )
+
+
 def get_period_bounds(timestamp, period):
-    current_timestamp = to_utc_naive_timestamp(timestamp)
+    current_timestamp = to_utc_timestamp(timestamp)
+
+    if period == "H":
+        # Berlin hours always coincide with UTC hours.
+        period_start = current_timestamp.floor("h").tz_localize(None)
+        return period_start, period_start + pd.Timedelta(hours=1)
+
+    # All other periods start at midnight or a multiple of four hours local
+    # time, which never falls into the hour skipped or repeated on DST changes.
+    local_timestamp = current_timestamp.tz_convert(PERIOD_TIMEZONE).tz_localize(None)
 
     if period == "4H":
-        period_start = current_timestamp.floor("4h")
-        return period_start, period_start + pd.Timedelta(hours=4)
+        period_start = local_timestamp.floor("4h")
+        period_end = period_start + pd.Timedelta(hours=4)
+    else:
+        frequency = PERIOD_FREQUENCIES.get(period)
+        if frequency is None:
+            raise ValueError(f"Unsupported period: {period}")
+        current_period = local_timestamp.to_period(frequency)
+        period_start = current_period.start_time
+        period_end = (current_period + 1).start_time
 
-    frequency = PERIOD_FREQUENCIES.get(period)
-    if frequency is None:
-        raise ValueError(f"Unsupported period: {period}")
-
-    current_period = current_timestamp.to_period(frequency)
-    return current_period.start_time, current_period.end_time + pd.Timedelta(
-        nanoseconds=1
-    )
+    return local_to_utc_naive(period_start), local_to_utc_naive(period_end)
 
 
 def check_for_period_change(timestamp, last_timestamp, period):
@@ -50,17 +68,6 @@ def get_period_end(timestamp, period) -> pd.Timestamp:
     _, period_end_exclusive = get_period_bounds(timestamp, period)
     return period_end_exclusive - pd.Timedelta(nanoseconds=1)
 
-def parse_row(row):
-    parsed = extract_timestamp_and_value(row)
-
-    if parsed is None:
-        return []
-
-    return [{
-        "ts": parsed[0],
-        "value": parsed[1],
-    }]
-
 def convert_inference_ds_to_ts(ds: typing.List[ray.ObjectRef[ray.data.Dataset]], time_series_frequency: str) -> darts.TimeSeries:
     parsed_datasets: typing.List[ray.data.Dataset] = []
 
@@ -72,7 +79,7 @@ def convert_inference_ds_to_ts(ds: typing.List[ray.ObjectRef[ray.data.Dataset]],
         parsed_datasets.append(parsed_dataset)
 
     if len(parsed_datasets) == 0:
-        raise RuntimeError("Need at least one dataset to train the model.")
+        raise RuntimeError("Need at least one dataset for inference.")
 
     merged_dataset = parsed_datasets[0]
     for additional_dataset in parsed_datasets[1:]:
@@ -83,7 +90,7 @@ def convert_inference_ds_to_ts(ds: typing.List[ray.ObjectRef[ray.data.Dataset]],
     num_points = sorted_dataset.count()
     if num_points < 2:
         raise RuntimeError(
-            "Need at least two timestamp/value points to train the model.")
+            "Need at least two timestamp/value points for inference.")
 
     inference_timeseries: darts.TimeSeries = convert_dataset_to_timeseries(sorted_dataset, time_series_frequency)
     return inference_timeseries

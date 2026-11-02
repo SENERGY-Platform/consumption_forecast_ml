@@ -42,6 +42,18 @@ def extract_timestamp_and_value(row: typing.Dict[str, typing.Any]) -> typing.Opt
     return to_epoch_seconds(ts), float(value)
 
 
+def parse_row(row: typing.Dict[str, typing.Any]) -> typing.List[typing.Dict[str, float]]:
+    parsed = extract_timestamp_and_value(row)
+
+    if parsed is None:
+        return []
+
+    return [{
+        "ts": parsed[0],
+        "value": parsed[1],
+    }]
+
+
 def convert_dataset_to_timeseries(ds: ray.data.Dataset, time_series_frequency: str) -> darts.TimeSeries:
     frequency = FREQUENCY_ALIASES.get(
         time_series_frequency,

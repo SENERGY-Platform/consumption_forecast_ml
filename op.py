@@ -3,8 +3,10 @@ from operator_lib.util.helpers import provide_historic_data, provide_historic_da
 
 
 import ray
+import time
 import typing
 import datetime
+import mlflow
 from mlflow.pyfunc import PyFuncModel, PythonModel
 from process_inference_data import (
     check_for_period_change,
@@ -15,11 +17,12 @@ from process_inference_data import (
 from inference import (
     compute_single_output_total,
     model_last_timestamp,
+    model_timeseries_frequency,
     predict_multi_output,
     predict_single_output,
 )
 
-from training import train_forecasting_model
+from training import MODEL_TYPES, train_forecasting_model
 from util import to_utc_naive_timestamp
 
 class CustomConfig(Config):
@@ -28,12 +31,19 @@ class CustomConfig(Config):
     
     def __init__(self, d, **kwargs):
         super().__init__(d, **kwargs)
+        # Validated here because operator-lib may start a training before
+        # Operator.init gets to the configuration.
+        if self.time_period not in Operator.period_single_or_multi_output:
+            raise ValueError(f"Unsupported time period: {self.time_period}")
+        if self.model_type not in MODEL_TYPES:
+            raise ValueError(f"Unsupported model type: {self.model_type}")
     
 class Operator(MLOperator):
     configType = CustomConfig
     period_single_or_multi_output = {
         'H': 'H',
-        '4H': '4H',
+        # Hourly, so that the Berlin 4H blocks consist of whole intervals.
+        '4H': 'H',
         'D': '4H',
         'W': 'D',
         'M': 'D',
@@ -77,6 +87,7 @@ class Operator(MLOperator):
         'M': datetime.timedelta(days=7),
         'Y': datetime.timedelta(days=28),
     }
+    training_retry_delay = datetime.timedelta(hours=1)
 
     def init(self, *args, **kwargs):
         super().init(*args, **kwargs)
@@ -84,10 +95,6 @@ class Operator(MLOperator):
         self.period = self.config.time_period
 
         logger.info(self.period)
-
-        self.all_possible_periods = set(self.period_single_or_multi_output)
-        if self.period not in self.all_possible_periods:
-            raise ValueError(f"Unsupported time period: {self.period}")
 
         self.timeseries_frequency = self.period_single_or_multi_output[self.period]
 
@@ -143,6 +150,7 @@ class Operator(MLOperator):
         current_period_start = get_period_start(self.timestamp, self.period)
         should_predict = (
             model is not None
+            and self.model_fits_period(model)
             and current_period_start
             != getattr(self, "last_predicted_period_start", None)
         )
@@ -224,23 +232,29 @@ class Operator(MLOperator):
             elapsed_in_period + interval_duration,
         )
 
-    def train(self, _: typing.Optional[PyFuncModel], logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
+    def train(self, _: typing.Optional[PyFuncModel], mlflow_logger: TrainMlflowLogger) -> typing.Optional[PythonModel]:
+        self.last_training_attempt = time.monotonic()
         period = self.config.time_period
         try:
-            history_duration = self.training_history_duration[period]
-            timeseries_frequency = self.period_single_or_multi_output[period]
-        except KeyError as exc:
-            raise ValueError(f"Unsupported time period: {period}") from exc
-
-        datasets = provide_historic_data(history_duration)
-        if len(datasets) == 0:
-            raise RuntimeError("Expected at least one ray Dataset!")
-        return ray.get(train_forecasting_model.remote(
-            datasets,
-            self.config.model_type,
-            timeseries_frequency,
-            logger,
-        ))
+            datasets = provide_historic_data(
+                self.training_history_duration[period]
+            )
+            if len(datasets) == 0:
+                raise RuntimeError("Expected at least one ray Dataset!")
+            return ray.get(train_forecasting_model.remote(
+                datasets,
+                self.config.model_type,
+                self.period_single_or_multi_output[period],
+                mlflow_logger,
+            ))
+        except Exception:
+            # Raising would stop the operator. Keep the current model and
+            # retry later instead.
+            logger.exception(
+                "Training failed! Retrying in %s at the earliest.",
+                self.training_retry_delay,
+            )
+            return None
 
     def need_retraining(self, model: typing.Optional[PyFuncModel]) -> bool:
         if getattr(self, "current_message_ignored", False):
@@ -249,11 +263,39 @@ class Operator(MLOperator):
         if not hasattr(self, "timestamp"):
             return False
 
-        if model is None:
+        if not self.model_is_outdated(model):
+            return False
+
+        if self.training_attempted_recently():
+            return False
+
+        # operator-lib leaves its MLflow run open when a training returns no
+        # model, which would make the next mlflow.start_run() fail.
+        if mlflow.active_run() is not None:
+            mlflow.end_run(status="FAILED")
+        return True
+
+    def model_is_outdated(self, model: typing.Optional[PyFuncModel]) -> bool:
+        if model is None or not self.model_fits_period(model):
             return True
 
         last_ts_model = model_last_timestamp(model)
         return (
             self.timestamp - last_ts_model
             >= self.retraining_intervals[self.period]
+        )
+
+    def model_fits_period(self, model: PyFuncModel) -> bool:
+        timeseries_frequency = model_timeseries_frequency(model)
+        if timeseries_frequency is None:
+            # Older models used the same frequencies, except for 4H.
+            return self.period != "4H"
+        return timeseries_frequency == self.timeseries_frequency
+
+    def training_attempted_recently(self) -> bool:
+        last_attempt = getattr(self, "last_training_attempt", None)
+        return (
+            last_attempt is not None
+            and time.monotonic() - last_attempt
+            < self.training_retry_delay.total_seconds()
         )

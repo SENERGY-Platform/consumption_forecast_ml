@@ -29,23 +29,27 @@ class NHitsForecastingModel(PythonModel):
     def __init__(
         self,
         model: NHiTSModel,
-        last_ts: pd.Timestamp
+        last_ts: pd.Timestamp,
+        timeseries_frequency: str,
     ) -> None:
         self.model = model
         self.last_ts = last_ts
+        self.timeseries_frequency = timeseries_frequency
 
-    def predict(self, data: typing.Any) -> typing.Any:
-        return self.model.predict(get_missing_steps(data))
-        
+    def predict(self, model_input):
+        return self.model.predict(get_missing_steps(model_input))
+
 class ProphetForecastingModel(PythonModel):
     def __init__(
         self,
         model: Prophet,
-        last_ts: pd.Timestamp
+        last_ts: pd.Timestamp,
+        timeseries_frequency: str,
     ) -> None:
         self.model = model
         self.last_ts = last_ts
+        self.timeseries_frequency = timeseries_frequency
 
-    def predict(self, data: typing.Any) -> typing.Any:
-        return self.model.predict(get_missing_steps(data))
+    def predict(self, model_input):
+        return self.model.predict(get_missing_steps(model_input))
 
