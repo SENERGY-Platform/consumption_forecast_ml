@@ -1,0 +1,100 @@
+{
+  "inputs": [
+    {
+      "name": "Consumption",
+      "type": "float"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "HourPrediction",
+      "type": "float"
+    },
+    {
+      "name": "HourPredictionTotal",
+      "type": "float"
+    },
+    {
+      "name": "HourTimestamp",
+      "type": "string"
+    },
+    {
+      "name": "FourHourPrediction",
+      "type": "float"
+    },
+    {
+      "name": "FourHourPredictionTotal",
+      "type": "float"
+    },
+    {
+      "name": "FourHourTimestamp",
+      "type": "string"
+    },
+    {
+      "name": "DayPrediction",
+      "type": "float"
+    },
+    {
+      "name": "DayPredictionTotal",
+      "type": "float"
+    },
+    {
+      "name": "DayTimestamp",
+      "type": "string"
+    },
+    {
+      "name": "WeekPrediction",
+      "type": "float"
+    },
+    {
+      "name": "WeekPredictionTotal",
+      "type": "float"
+    },
+    {
+      "name": "WeekTimestamp",
+      "type": "string"
+    },
+    {
+      "name": "MonthPrediction",
+      "type": "float"
+    },
+    {
+      "name": "MonthPredictionTotal",
+      "type": "float"
+    },
+    {
+      "name": "MonthTimestamp",
+      "type": "string"
+    },
+    {
+      "name": "YearPrediction",
+      "type": "float"
+    },
+    {
+      "name": "YearPredictionTotal",
+      "type": "float"
+    },
+    {
+      "name": "YearTimestamp",
+      "type": "string"
+    }
+  ],
+  "config_values": [
+    {
+      "name": "time_periods",
+      "type": "string"
+    },
+    {
+      "name": "model",
+      "type": "string"
+    },
+    {
+      "name": "add_time_covariates",
+      "type": "bool"
+    },
+    {
+      "name": "logger_level",
+      "type": "string"
+    }
+  ]
+}
