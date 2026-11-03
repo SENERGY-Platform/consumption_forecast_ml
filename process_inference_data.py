@@ -1,7 +1,6 @@
 import typing
-import ray
 from util import (
-    convert_dataset_to_timeseries,
+    convert_frame_to_timeseries,
     parse_row,
     to_utc_naive_timestamp,
     to_utc_timestamp,
@@ -89,29 +88,20 @@ def get_raster_start(timestamp, timeseries_frequency) -> pd.Timestamp:
         raise ValueError(f"Unsupported forecast frequency: {timeseries_frequency}")
     return current_timestamp.floor(frequency)
 
-def convert_inference_ds_to_ts(ds: typing.List[ray.ObjectRef[ray.data.Dataset]], time_series_frequency: str) -> darts.TimeSeries:
-    parsed_datasets: typing.List[ray.data.Dataset] = []
-
-    for ds_ref in ds:
-        dataset = ray.get(ds_ref) if isinstance(
-                    ds_ref, ray.ObjectRef) else ds_ref
-
-        parsed_dataset = dataset.flat_map(parse_row)
-        parsed_datasets.append(parsed_dataset)
-
-    if len(parsed_datasets) == 0:
+def convert_inference_frames_to_ts(frames: typing.List[pd.DataFrame], time_series_frequency: str) -> darts.TimeSeries:
+    if len(frames) == 0:
         raise RuntimeError("Need at least one dataset for inference.")
 
-    merged_dataset = parsed_datasets[0]
-    for additional_dataset in parsed_datasets[1:]:
-        merged_dataset = merged_dataset.union(additional_dataset)
-
-    sorted_dataset = merged_dataset.sort("ts").materialize()
-
-    num_points = sorted_dataset.count()
-    if num_points < 2:
+    # Missing values as None, which parse_row skips, as it did the nulls of a
+    # Ray dataset.
+    rows = [
+        parsed
+        for frame in frames
+        for row in frame.astype(object).where(frame.notna(), None).to_dict("records")
+        for parsed in parse_row(row)
+    ]
+    if len(rows) < 2:
         raise RuntimeError(
             "Need at least two timestamp/value points for inference.")
 
-    inference_timeseries: darts.TimeSeries = convert_dataset_to_timeseries(sorted_dataset, time_series_frequency)
-    return inference_timeseries
+    return convert_frame_to_timeseries(pd.DataFrame(rows), time_series_frequency)

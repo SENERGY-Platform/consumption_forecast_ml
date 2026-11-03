@@ -1,5 +1,11 @@
 from operator_lib.util import Config, Inputs, MLOperator, Outputs, logger
-from operator_lib.util.helpers import provide_historic_data, provide_historic_data_local, TrainMlflowLogger
+from operator_lib.util.helpers import (
+    HistoryNeedsRayError,
+    provide_historic_data,
+    provide_historic_data_local,
+    provide_historic_frames_local,
+    TrainMlflowLogger,
+)
 
 
 import ray
@@ -7,10 +13,11 @@ import time
 import typing
 import datetime
 import mlflow
+import pandas as pd
 from mlflow.pyfunc import PyFuncModel, PythonModel
 from build_models import ForecastingModels
 from process_inference_data import (
-    convert_inference_ds_to_ts,
+    convert_inference_frames_to_ts,
     format_period_end,
     get_period_start,
     get_raster_start,
@@ -153,6 +160,7 @@ class Operator(MLOperator):
         self.latest_outputs = {}
 
         self.current_message_ignored = False
+        self.history_needs_ray = False
 
 
     def infer(self, model: typing.Optional[PyFuncModel], data: typing.Dict[str, typing.Any], selector: str, device_id: str, timestamp: datetime.datetime) -> typing.Tuple[typing.Optional[datetime.datetime], typing.Optional[typing.Any], typing.Optional[PythonModel]]:
@@ -191,10 +199,10 @@ class Operator(MLOperator):
             period for period in due_periods
             if self.period_single_or_multi_output[period] != period
         ]
-        inference_datasets = None
+        inference_frames = None
         if multi_output_periods:
             try:
-                inference_datasets = provide_historic_data_local(max(
+                inference_frames = self.read_inference_history(max(
                     self.get_inference_history_duration(period)
                     for period in multi_output_periods
                 ))
@@ -213,7 +221,7 @@ class Operator(MLOperator):
                     model,
                     payload,
                     period,
-                    inference_datasets,
+                    inference_frames,
                     inference_timeseries,
                 )
             except Exception:
@@ -246,7 +254,23 @@ class Operator(MLOperator):
             and self.forecast_keys.get(period) != self.forecast_key(period)
         ]
 
-    def forecast_period(self, model, payload, period, inference_datasets, inference_timeseries) -> typing.Dict[str, typing.Any]:
+    def read_inference_history(self, duration: datetime.timedelta) -> typing.List[pd.DataFrame]:
+        # infer() runs without a cluster connection, where
+        # provide_historic_data_local starts a local Ray instance of about 2 GB.
+        # Only the history of an input fed by another operator, which is in
+        # Kafka, still needs it.
+        if not self.history_needs_ray:
+            try:
+                return provide_historic_frames_local(duration)
+            except HistoryNeedsRayError:
+                logger.warning(
+                    "The history of the input is only in Kafka; reading it "
+                    "with Ray, which starts a local Ray instance."
+                )
+                self.history_needs_ray = True
+        return [dataset.to_pandas() for dataset in provide_historic_data_local(duration)]
+
+    def forecast_period(self, model, payload, period, inference_frames, inference_timeseries) -> typing.Dict[str, typing.Any]:
         timeseries_frequency = self.period_single_or_multi_output[period]
         if timeseries_frequency == period:
             forecast = predict_single_output(
@@ -257,8 +281,8 @@ class Operator(MLOperator):
             )
         else:
             if timeseries_frequency not in inference_timeseries:
-                inference_timeseries[timeseries_frequency] = convert_inference_ds_to_ts(
-                    inference_datasets,
+                inference_timeseries[timeseries_frequency] = convert_inference_frames_to_ts(
+                    inference_frames,
                     timeseries_frequency,
                 )
             forecast = predict_multi_output(

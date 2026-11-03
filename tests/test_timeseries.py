@@ -3,7 +3,8 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from fakes import FakeDataset
+from fakes import FakeDataset, meter_readings
+from process_inference_data import convert_inference_frames_to_ts
 from util import convert_dataset_to_timeseries, parse_row
 
 
@@ -50,6 +51,25 @@ class ConvertDatasetToTimeseriesTest(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             convert_dataset_to_timeseries(parsed_rows(timestamps, [1.0, 2.0]), "H")
+
+
+class ConvertInferenceFramesToTimeseriesTest(unittest.TestCase):
+    def test_hourly_consumption_from_frames_of_several_inputs(self):
+        first = pd.DataFrame(meter_readings("2026-01-14 00:00", "2026-01-14 01:45"))
+        second = pd.DataFrame(meter_readings("2026-01-14 02:00", "2026-01-14 04:00"))
+        second["Consumption"] += 2.0
+
+        series = convert_inference_frames_to_ts([second, first], "H")
+
+        self.assertEqual(series.time_index[0], pd.Timestamp("2026-01-14 00:00"))
+        np.testing.assert_allclose(series.univariate_values(), [1.0] * 4)
+
+    def test_readings_without_consumption_are_no_points(self):
+        frame = pd.DataFrame(meter_readings("2026-01-14 00:00", "2026-01-14 00:30"))
+        frame.loc[1:, "Consumption"] = np.nan
+
+        with self.assertRaisesRegex(RuntimeError, "two timestamp/value points"):
+            convert_inference_frames_to_ts([frame], "H")
 
 
 class ParseRowTest(unittest.TestCase):

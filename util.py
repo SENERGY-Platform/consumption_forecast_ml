@@ -59,11 +59,15 @@ def parse_row(row: typing.Dict[str, typing.Any]) -> typing.List[typing.Dict[str,
 
 
 def convert_dataset_to_timeseries(ds: ray.data.Dataset, time_series_frequency: str) -> darts.TimeSeries:
+    return convert_frame_to_timeseries(ds.to_pandas(), time_series_frequency)
+
+
+def convert_frame_to_timeseries(df: pd.DataFrame, time_series_frequency: str) -> darts.TimeSeries:
     frequency = FREQUENCY_ALIASES.get(
         time_series_frequency,
         time_series_frequency,
     )
-    df = ds.to_pandas().set_index("ts").sort_index()
+    df = df.set_index("ts").sort_index()
     df.index = pd.to_datetime(df.index, unit="s", utc=True).tz_localize(None)
     # Align timestamps to whole seconds.
     df.index = df.index.map(lambda x: x.replace(microsecond=0))

@@ -9,6 +9,7 @@ import mlflow
 import pandas as pd
 from operator_lib.manifest import build_manifest
 from operator_lib.util import MLOperator, logger
+from operator_lib.util.helpers import HistoryNeedsRayError
 
 from fakes import FakeDataset, FakeForecaster, FakeModel, meter_readings
 from op import CustomConfig, Operator, parse_bool, parse_time_periods
@@ -42,9 +43,22 @@ def receive(operator, timestamp, model=None, consumption=100.0):
 def recent_history(end):
     """Patches the read of recent history: 1 kWh per hour until end."""
     return mock.patch(
+        "op.provide_historic_frames_local",
+        return_value=[pd.DataFrame(meter_readings("2026-01-13 18:00", end))],
+    )
+
+
+def history_only_kafka_has(end):
+    """Patches both reads for an input fed by another operator, whose history needs Ray."""
+    without_ray = mock.patch(
+        "op.provide_historic_frames_local",
+        side_effect=HistoryNeedsRayError("only in Kafka"),
+    )
+    with_ray = mock.patch(
         "op.provide_historic_data_local",
         return_value=[FakeDataset(meter_readings("2026-01-13 18:00", end))],
     )
+    return without_ray, with_ray
 
 
 def utc(timestamp):
@@ -214,6 +228,43 @@ class InferTest(unittest.TestCase):
         )
 
         self.assertEqual(result, (None, None, None))
+
+
+class InferenceHistoryTest(unittest.TestCase):
+    model = FakeModel({"4H": FakeForecaster("2026-01-14 04:00", value=4.0)})
+
+    def test_reads_history_without_ray(self):
+        operator = make_operator("D")
+
+        with recent_history("2026-01-14 14:15"), \
+                mock.patch("op.provide_historic_data_local") as read_with_ray:
+            _, output, _ = receive(operator, "2026-01-14 14:15", self.model)
+
+        self.assertAlmostEqual(output["DayPrediction"], 24.0)
+        read_with_ray.assert_not_called()
+
+    def test_reads_history_only_kafka_has_with_ray_and_warns(self):
+        operator = make_operator("D")
+        without_ray, with_ray = history_only_kafka_has("2026-01-14 14:15")
+
+        with without_ray, with_ray, self.assertLogs(logger, "WARNING"):
+            _, output, _ = receive(operator, "2026-01-14 14:15", self.model)
+
+        self.assertAlmostEqual(output["DayPrediction"], 24.0)
+
+    def test_tries_without_ray_and_warns_only_once(self):
+        operator = make_operator("D")
+        without_ray, with_ray = history_only_kafka_has("2026-01-14 23:10")
+
+        with without_ray as read_without_ray, with_ray as read_with_ray, \
+                self.assertLogs(logger, "WARNING") as logs:
+            receive(operator, "2026-01-14 14:15", self.model)
+            receive(operator, "2026-01-14 23:10", self.model)
+
+        self.assertEqual(
+            (read_without_ray.call_count, read_with_ray.call_count, len(logs.records)),
+            (1, 2, 1),
+        )
 
 
 class NeedRetrainingTest(unittest.TestCase):
