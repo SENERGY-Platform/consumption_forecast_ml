@@ -22,6 +22,10 @@ INTERVAL_DURATIONS = {
 }
 
 
+class PeriodBeforeModelEnd(RuntimeError):
+    """The requested period ended before the model's training data did."""
+
+
 @dataclass(frozen=True)
 class PeriodForecast:
     period_consumption: float
@@ -126,7 +130,7 @@ def predict_values_through_current_period(
         payload["timestamp"],
     )
     if missing_steps < 1:
-        raise RuntimeError(
+        raise PeriodBeforeModelEnd(
             "The model already ends at or after the requested forecast period."
         )
 

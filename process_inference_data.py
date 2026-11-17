@@ -1,5 +1,6 @@
 import typing
 from util import (
+    TooLittleHistory,
     convert_frame_to_timeseries,
     parse_row,
     to_utc_naive_timestamp,
@@ -101,7 +102,7 @@ def convert_inference_frames_to_ts(frames: typing.List[pd.DataFrame], time_serie
         for parsed in parse_row(row)
     ]
     if len(rows) < 2:
-        raise RuntimeError(
+        raise TooLittleHistory(
             "Need at least two timestamp/value points for inference.")
 
     return convert_frame_to_timeseries(pd.DataFrame(rows), time_series_frequency)

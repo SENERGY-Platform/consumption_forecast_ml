@@ -17,6 +17,10 @@ FREQUENCY_ALIASES = {
 VALUE_COLUMN = "Consumption"
 
 
+class TooLittleHistory(RuntimeError):
+    """The history read holds too few values to build a series from."""
+
+
 def to_utc_timestamp(value: typing.Any) -> pd.Timestamp:
     if isinstance(value, (int, float)):
         return pd.Timestamp(value, unit="s", tz="UTC")
@@ -84,7 +88,7 @@ def convert_frame_to_timeseries(df: pd.DataFrame, time_series_frequency: str) ->
         .dropna()
     )
     if len(df_resampled) < 2:
-        raise RuntimeError("Need at least two aligned meter values.")
+        raise TooLittleHistory("Need at least two aligned meter values.")
 
     differences = df_resampled.diff().shift(-1).iloc[:-1]
     # Ignore counter resets.

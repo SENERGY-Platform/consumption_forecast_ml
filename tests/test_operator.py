@@ -229,6 +229,48 @@ class InferTest(unittest.TestCase):
 
         self.assertEqual(result, (None, None, None))
 
+    def test_skips_backlog_older_than_model_and_says_so_once(self):
+        operator = make_operator("D")
+        model = FakeModel({"4H": FakeForecaster("2026-01-14 08:00", value=4.0)})
+
+        history = [pd.DataFrame(
+            meter_readings("2026-01-11 18:00", "2026-01-12 15:05"))]
+
+        with mock.patch("op.provide_historic_frames_local", return_value=history), \
+                self.assertNoLogs(logger, "WARNING"), \
+                self.assertLogs(logger, "INFO") as logs:
+            first = receive(operator, "2026-01-12 10:15", model)
+            second = receive(operator, "2026-01-12 15:05", model)
+
+        self.assertEqual((first, second), ((None, None, None), (None, None, None)))
+        self.assertEqual(len(logs.records), 1)
+
+    def test_forecasts_once_backlog_has_caught_up_with_model(self):
+        operator = make_operator("D")
+        model = FakeModel({"4H": FakeForecaster("2026-01-14 08:00", value=4.0)})
+
+        with recent_history("2026-01-14 14:15"):
+            receive(operator, "2026-01-12 10:15", model)
+            _, output, _ = receive(operator, "2026-01-14 14:15", model)
+
+        self.assertEqual(output["DayTimestamp"], "2026-01-14T22:59:59Z")
+
+    def test_warns_and_tries_again_when_history_is_too_short(self):
+        operator = make_operator("D")
+        model = FakeModel({"4H": FakeForecaster("2026-01-14 08:00", value=4.0)})
+        one_reading = [pd.DataFrame(
+            meter_readings("2026-01-14 14:00", "2026-01-14 14:00"))]
+
+        with mock.patch("op.provide_historic_frames_local", return_value=one_reading), \
+                self.assertLogs(logger, "WARNING") as logs:
+            skipped = receive(operator, "2026-01-14 14:15", model)
+        with recent_history("2026-01-14 14:30"):
+            _, output, _ = receive(operator, "2026-01-14 14:30", model)
+
+        self.assertEqual(skipped, (None, None, None))
+        self.assertEqual([record.levelname for record in logs.records], ["WARNING"])
+        self.assertEqual(output["DayTimestamp"], "2026-01-14T22:59:59Z")
+
 
 class InferenceHistoryTest(unittest.TestCase):
     model = FakeModel({"4H": FakeForecaster("2026-01-14 04:00", value=4.0)})

@@ -23,6 +23,7 @@ from process_inference_data import (
     get_raster_start,
 )
 from inference import (
+    PeriodBeforeModelEnd,
     compute_single_output_total,
     interval_duration,
     model_forecasters,
@@ -31,7 +32,7 @@ from inference import (
 )
 
 from training import MODEL_TYPES, train_forecasters
-from util import VALUE_COLUMN, to_utc_naive_timestamp
+from util import TooLittleHistory, VALUE_COLUMN, to_utc_naive_timestamp
 
 
 def parse_time_periods(value: typing.Any) -> typing.List[str]:
@@ -161,6 +162,8 @@ class Operator(MLOperator):
 
         self.current_message_ignored = False
         self.history_needs_ray = False
+        # Periods whose latest message was older than the model, to say so once.
+        self.periods_behind_model = set()
 
 
     def infer(self, model: typing.Optional[PyFuncModel], data: typing.Dict[str, typing.Any], selector: str, device_id: str, timestamp: datetime.datetime) -> typing.Tuple[typing.Optional[datetime.datetime], typing.Optional[typing.Any], typing.Optional[PythonModel]]:
@@ -224,9 +227,25 @@ class Operator(MLOperator):
                     inference_frames,
                     inference_timeseries,
                 )
+            except PeriodBeforeModelEnd:
+                # A new pipeline reads the backlog of its topic, thousands of
+                # messages from before the model's last training value.
+                if period not in self.periods_behind_model:
+                    self.periods_behind_model.add(period)
+                    logger.info(
+                        f"No forecast for {period}: the messages are older "
+                        "than the model. Forecasting starts once they catch up."
+                    )
+                continue
+            except TooLittleHistory as exc:
+                # The reading of this message may not be in the history yet;
+                # the next message tries again.
+                logger.warning(f"No forecast for {period} yet: {exc}")
+                continue
             except Exception:
                 logger.exception(f"Prediction for {period} failed!")
                 continue
+            self.periods_behind_model.discard(period)
             self.forecast_keys[period] = self.forecast_key(period)
             updated = True
 
